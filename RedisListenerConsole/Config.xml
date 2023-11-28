@@ -1,0 +1,17 @@
+<redis_listen>
+	<redis_config>
+		<Ip value = "127.0.0.1"/>
+		<Port value = "6379"/>
+		<Mode value = "10"/>
+	</redis_config>
+	<redis_get>
+		<time_span value = "100"/>
+		<key_count value = "2"/>
+		<key_value value = "123321"/>
+		<key_value value = "321123"/>
+	</redis_get>
+	<redis_sub>
+		<channel_count value = "-1"/>
+	</redis_sub>
+	
+</redis_listen>
