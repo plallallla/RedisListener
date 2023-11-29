@@ -2,7 +2,7 @@
 	<redis_config>
 		<IP value = "127.0.0.1"/>
 		<Port value = "6379"/>
-		<Mode value = "10"/>
+		<Mode value = "100"/>
 	</redis_config>
 	<redis_get>
 		<time_span value = "100"/>

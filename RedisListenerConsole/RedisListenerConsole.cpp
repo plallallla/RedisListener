@@ -84,6 +84,7 @@ bool InitSocket()
 	return err == 0;
 }
 
+sPdlog recorder{"getTest"};
 
 std::list <std::string> sub_names;
 std::vector <std::string> get_keys;
@@ -130,7 +131,7 @@ bool InitConfig()
 	in_file.close();
 	return true;
 }
-std::atomic<bool> getFlag{ false };
+std::atomic<bool> getFlag{ true };
 void GetWorker()
 {
 	cpp_redis::client c;
@@ -142,26 +143,28 @@ void GetWorker()
 		{
 			c.mget(get_keys, [=](cpp_redis::reply & reply)
 			{
-				for (auto replyValue : reply.as_array())
+				auto &replys = reply.as_array();
+				for (int i = 0; i < get_keys.size(); i++)
 				{
-					//log TODO	
-					std::cout << replyValue << std::endl;
+					std::cout << get_keys[i] + " get " + replys[i].as_string() << std::endl;
+					recorder.logger->info(get_keys[i] + " get " + replys[i].as_string());
 				}
 			});
 			c.sync_commit();
 		}
 		catch (const std::exception & e)
 		{
+			recorder.logger->warn("exception@c.mget");
+			return;
 		}
 	}
 }
 
 int main()
 {
-	sPdlog sysLog{ "system" };
 	if (!InitSocket())
 	{
-		sysLog.logger->critical("error @ InitSocket");
+		recorder.logger->critical("error @ InitSocket");
 		return 0;
 	}
 	InitConfig();
