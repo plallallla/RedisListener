@@ -10,13 +10,15 @@
 #include <sstream>
 #include <regex>
 #include <rapidxml/rapidxml.hpp>
+#include <memory>
+#include <vector>
+#include <atomic>
 
 struct sPdlog
 {
 	std::shared_ptr<spdlog::logger> logger;
 	sPdlog(std::string name)
 	{
-
 		auto now = std::chrono::system_clock::now();
 		//通过不同精度获取相差的毫秒数
 		uint64_t dis_millseconds = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count()
@@ -25,12 +27,13 @@ struct sPdlog
 		tm time_tm;
 		localtime_s(&time_tm, &tt);
 		std::stringstream ss;
-		ss << "logs/" << time_tm.tm_year + 1900 << "_"
-			<< time_tm.tm_mon + 1 << "_"
-			<< time_tm.tm_mday << "_"
-			<< time_tm.tm_hour << "_"
-			<< time_tm.tm_min << "_"
-			<< time_tm.tm_sec << ".log";
+		ss << "logs/" << time_tm.tm_year + 1900
+			<< "_" << time_tm.tm_mon + 1
+			<< "_"<< time_tm.tm_mday
+			<< "_"<< time_tm.tm_hour 
+			//<< "_"<< time_tm.tm_min TODO
+			//<< "_" << time_tm.tm_sec
+			<< ".log";
 		logger = spdlog::basic_logger_mt(name, ss.str());
 		logger->flush_on(spdlog::level::trace);
 	}
@@ -81,138 +84,96 @@ bool InitSocket()
 	return err == 0;
 }
 
+
 std::list <std::string> sub_names;
-std::list <std::string> get_names;
+std::vector <std::string> get_keys;
 int time_span;
 
+std::string ip;
+int port;
 bool InitConfig()
 {
-	std::ifstream file("config.txt", std::ios::in);
-	std::string line;
-	std::getline(file, line);
-	if (!strcmp(line.c_str(), "subscriber"))
+	std::ifstream in_file("Config.xml", std::ios::binary | std::ios::ate);
+	int size = in_file.tellg();
+	in_file.seekg(0, std::ios::beg);
+	char *buffer = new char[size + 1];
+	in_file.read(buffer, size);
+	buffer[size] = 0;
+	rapidxml::xml_document<> xDoc;
+	xDoc.parse<0>(buffer);
+	auto root = xDoc.first_node("redis_listen");
+	int mode;
+	if (auto config = root->first_node("redis_config"))
 	{
-		std::getline(file, line);
-		std::regex fliter{ "," };
-		std::sregex_token_iterator it(line.begin(), line.end(), fliter, -1);
-		std::sregex_token_iterator end;
-		while (it != end)
+		ip = config->first_node("IP")->first_attribute("value")->value();
+		port = atoi(config->first_node("Port")->first_attribute("value")->value());
+		mode = atoi(config->first_node("Mode")->first_attribute("value")->value());
+	}
+	if (mode / 10)
+	{
+		auto getNode = root->first_node("redis_get");
+		time_span = atoi(getNode->first_node("time_span")->first_attribute("value")->value());
+		int count = atoi(getNode->first_node("key_count")->first_attribute("value")->value());
+		char key[20];
+		for (int i = 0; i < count; i++)
 		{
-			sub_names.emplace_back(it->str());
-			it++;
+			sprintf_s(key, "key_%d", i);
+			std::string keyStr{ getNode->first_node(key)->first_attribute("value")->value() };
+			get_keys.emplace_back(keyStr);
 		}
 	}
-	else
+	if (mode % 10)
 	{
-		spdlog::warn("config error @ subscriber");
-		return false;
+		auto getNode = root->first_node("redis_sub");
 	}
-	std::getline(file, line);
-	if (!strcmp(line.c_str(), "channel"))
-	{
-		std::getline(file, line);
-		std::regex fliter{ "," };
-		std::sregex_token_iterator it(line.begin(), line.end(), fliter, -1);
-		std::sregex_token_iterator end;
-		while (it != end)
-		{
-			get_names.emplace_back(it->str());
-			it++;
-		}
-	}
-	else
-	{
-		spdlog::warn("config error @ channel");
-		return false;
-	}
-	std::getline(file, line);
-	if (!strcmp(line.c_str(), "timespan"))
-	{
-		std::getline(file, line);
-		time_span = atoi(line.c_str());
-	}
-	else
-	{
-		spdlog::warn("config error @ timespan");
-		return false;
-	}
+	delete[] buffer;
+	in_file.close();
 	return true;
 }
-
-bool stop{ false };
-void GetWorker(const std::string &channel)
+std::atomic<bool> getFlag{ false };
+void GetWorker()
 {
-	while (!stop)
+	cpp_redis::client c;
+	c.connect(ip, port);
+	c.sync_commit();
+	while (getFlag.load())
 	{
-		//TODO:get msg
-		sPdlog sysLog{ channel };
-		sysLog.logger->info("msg");
-		std::this_thread::sleep_for(std::chrono::milliseconds(time_span));
+		try
+		{
+			c.mget(get_keys, [=](cpp_redis::reply & reply)
+			{
+				for (auto replyValue : reply.as_array())
+				{
+					//log TODO	
+					std::cout << replyValue << std::endl;
+				}
+			});
+			c.sync_commit();
+		}
+		catch (const std::exception & e)
+		{
+		}
 	}
-}
-
-void funcTestGet()
-{
-
 }
 
 int main()
 {
 	sPdlog sysLog{ "system" };
-	//InitConfig();
-
 	if (!InitSocket())
 	{
 		sysLog.logger->critical("error @ InitSocket");
 		return 0;
 	}
-	try
-	{
-		cpp_redis::subscriber s;
-		s.connect("127.0.0.1", 6379);
-		s.psubscribe("*", message_handler);
-		s.commit();
-	}
-	catch (const std::exception& e)
-	{
-		sysLog.logger->critical(e.what());
-	}
-
-	try
-	{
-		cpp_redis::client c;
-		c.connect("127.0.0.1", 6379);
-		c.get("hello", [](cpp_redis::reply & reply)
-		{
-			std::cout << reply << std::endl;
-		});
-	}
-	catch (const std::exception & e)
-	{
-		sysLog.logger->critical(e.what());
-	}
-
-	cpp_redis::client client;
-
-	client.connect();
-
-	client.set("hello", "42");
-	client.get("hello", [](cpp_redis::reply& reply) {
-		std::cout << reply << std::endl;
-	});
-	client.sync_commit();
-
+	InitConfig();
 	//TODO:sub
 	//std::vector<std::thread> getWorkers;
 	//for (auto &channel : get_names)
 	//{
 	//	getWorkers.emplace_back(std::thread{ GetWorker ,channel });
 	//}
-
-	//stop = true;
-	//for (auto &worker : getWorkers)
-	//{
-	//	worker.join();
-	//}
+	std::thread tWorker{ GetWorker };
+	std::this_thread::sleep_for(std::chrono::milliseconds(10000));
+	getFlag.store(false);
+	tWorker.join();
 	return 0;
 }
