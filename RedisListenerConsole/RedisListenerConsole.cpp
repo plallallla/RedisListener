@@ -86,7 +86,7 @@ bool InitSocket()
 
 sPdlog recorder{"getTest"};
 
-std::list <std::string> sub_names;
+std::vector <std::string> sub_names;
 std::vector <std::string> get_keys;
 int time_span;
 
@@ -132,6 +132,7 @@ bool InitConfig()
 	return true;
 }
 std::atomic<bool> getFlag{ true };
+std::vector<cpp_redis::reply> lastReplys;
 void GetWorker()
 {
 	cpp_redis::client c;
@@ -146,18 +147,66 @@ void GetWorker()
 				auto &replys = reply.as_array();
 				for (int i = 0; i < get_keys.size(); i++)
 				{
-					std::cout << get_keys[i] + " get " + replys[i].as_string() << std::endl;
-					recorder.logger->info(get_keys[i] + " get " + replys[i].as_string());
+					if (replys[i].as_string() != lastReplys[i].as_string())
+					{
+						std::cout << get_keys[i] + " get " + replys[i].as_string() << std::endl;
+						recorder.logger->info(get_keys[i] + " get " + replys[i].as_string());
+					}
 				}
+				lastReplys = replys;
 			});
 			c.sync_commit();
 		}
-		catch (const std::exception & e)
+		catch (const std::exception&)
 		{
 			recorder.logger->warn("exception@c.mget");
 			return;
 		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(time_span));
 	}
+}
+
+void funcTestGetPart()
+{
+
+	cpp_redis::client c;
+	c.connect(ip, port);
+	c.sync_commit();
+	try
+	{
+		c.mget(get_keys, [=](cpp_redis::reply & reply)
+		{
+			lastReplys = reply.as_array();
+			for (int i = 0; i < get_keys.size(); i++)
+			{
+				std::cout << get_keys[i] + " get " + lastReplys[i].as_string() << " for the first time" << std::endl;
+				recorder.logger->info(get_keys[i] + " get " + lastReplys[i].as_string() + " for the first time");
+			}
+		});
+		c.sync_commit();
+	}
+	catch (const std::exception&)
+	{
+		recorder.logger->warn("exception@c.mget1st");
+		return;
+	}
+	std::thread tWorker{ GetWorker };
+	std::this_thread::sleep_for(std::chrono::milliseconds(10000));
+	getFlag.store(false);
+	tWorker.join();
+}
+
+cpp_redis::subscriber::subscribe_callback_t ProcessSubscribeRet = [](const std::string & c, const std::string & msg)
+{
+	std::cout << "c:" << c << ";msg:" << msg << std::endl;
+};
+
+void funcTestSubPart()
+{
+	cpp_redis::subscriber sub;
+	sub.connect(ip, port);
+	sub.commit();
+	//sub.psubscribe("*");
 }
 
 int main()
@@ -168,15 +217,7 @@ int main()
 		return 0;
 	}
 	InitConfig();
-	//TODO:sub
-	//std::vector<std::thread> getWorkers;
-	//for (auto &channel : get_names)
-	//{
-	//	getWorkers.emplace_back(std::thread{ GetWorker ,channel });
-	//}
-	std::thread tWorker{ GetWorker };
-	std::this_thread::sleep_for(std::chrono::milliseconds(10000));
-	getFlag.store(false);
-	tWorker.join();
+	funcTestGetPart();
+	//funcTestSubPart();
 	return 0;
 }
